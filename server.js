@@ -114,6 +114,33 @@ app.patch("/api/complaints/:id", authMiddleware, requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const { status } = req.body;
 
+  if (!id || !status) {
+    return res.status(400).json({ error: "Invalid data" });
+  }
+
+  db.run(
+    `UPDATE complaints SET status=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+    [status, id],
+    function (err) {
+      if (err) {
+        console.error(err);
+        return res.status(500).json({ error: "Failed to update complaint" });
+      }
+
+      // ⭐ RETURN UPDATED ROW (IMPORTANT)
+      db.get(`SELECT * FROM complaints WHERE id=?`, [id], (err2, row) => {
+        if (err2) {
+          console.error(err2);
+          return res.status(200).json({ id, status });
+        }
+        res.json(row);
+      });
+    }
+  );
+});
+  const id = Number(req.params.id);
+  const { status } = req.body;
+
   db.run(`UPDATE complaints SET status=? WHERE id=?`, [status, id], function (err) {
     if (err) return res.status(500).json({ error: "Update failed" });
     res.json({ id, status });
