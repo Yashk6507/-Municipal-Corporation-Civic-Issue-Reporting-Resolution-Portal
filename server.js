@@ -13,32 +13,25 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 const JWT_SECRET = process.env.JWT_SECRET || "development-secret-change-me";
 
-/* ===================== UPLOAD FOLDER ===================== */
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const unique = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, unique + path.extname(file.originalname || ""));
-  },
-});
-const upload = multer({ storage });
-
-/* ===================== MIDDLEWARE ===================== */
+/* ================= MIDDLEWARE ================= */
 app.use(cors({ origin: "*" }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+/* ================= UPLOAD FOLDER ================= */
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
 app.use("/uploads", express.static(uploadDir));
 
-/* ⭐ SERVE FRONTEND FROM ROOT (IMPORTANT FOR YOUR REPO) */
-app.use(express.static(__dirname));
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) =>
+    cb(null, Date.now() + "-" + Math.round(Math.random() * 1e9) + path.extname(file.originalname || "")),
+});
+const upload = multer({ storage });
 
-/* ===================== AUTH HELPERS ===================== */
+/* ================= AUTH HELPERS ================= */
 function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer "))
@@ -58,20 +51,9 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-function createNotification(userId, complaintId, type, message) {
-  db.run(
-    `INSERT INTO notifications (user_id, complaint_id, type, message)
-     VALUES (?, ?, ?, ?)`,
-    [userId, complaintId || null, type, message]
-  );
-}
-
-/* ===================== AUTH ROUTES ===================== */
+/* ================= AUTH ROUTES ================= */
 app.post("/api/auth/register", (req, res) => {
   const { name, email, password } = req.body;
-  if (!name || !email || !password)
-    return res.status(400).json({ error: "All fields required" });
-
   const hash = bcrypt.hashSync(password, 10);
 
   db.run(
@@ -90,51 +72,71 @@ app.post("/api/auth/register", (req, res) => {
 app.post("/api/auth/login", (req, res) => {
   const { email, password } = req.body;
 
-  db.get(
-    `SELECT * FROM users WHERE email=?`,
-    [email.toLowerCase()],
-    (err, row) => {
-      if (!row || !bcrypt.compareSync(password, row.password_hash))
-        return res.status(401).json({ error: "Invalid credentials" });
+  db.get(`SELECT * FROM users WHERE email=?`, [email.toLowerCase()], (err, row) => {
+    if (!row || !bcrypt.compareSync(password, row.password_hash))
+      return res.status(401).json({ error: "Invalid credentials" });
 
-      const user = { id: row.id, name: row.name, email: row.email, role: row.role };
-      const token = jwt.sign(user, JWT_SECRET, { expiresIn: "7d" });
-      res.json({ token, user });
-    }
-  );
+    const user = { id: row.id, name: row.name, email: row.email, role: row.role };
+    const token = jwt.sign(user, JWT_SECRET, { expiresIn: "7d" });
+    res.json({ token, user });
+  });
 });
 
-/* ===================== COMPLAINT ROUTES ===================== */
+/* ================= COMPLAINT ROUTES ================= */
 app.post("/api/complaints", authMiddleware, upload.single("image"), (req, res) => {
   const { category, description } = req.body;
   const image = req.file ? `/uploads/${req.file.filename}` : null;
 
   db.run(
-    `INSERT INTO complaints (user_id,category,description,image_path)
-     VALUES (?,?,?,?)`,
+    `INSERT INTO complaints (user_id,category,description,image_path) VALUES (?,?,?,?)`,
     [req.user.id, category, description, image],
     function (err) {
       if (err) return res.status(500).json({ error: "Failed to submit complaint" });
-
-      createNotification(req.user.id, this.lastID, "complaint_submitted", "Complaint submitted");
       res.json({ id: this.lastID });
     }
   );
 });
 
 app.get("/api/complaints", authMiddleware, (req, res) => {
-  db.all(`SELECT * FROM complaints WHERE user_id=?`, [req.user.id], (err, rows) => {
+  const isAdmin = req.user.role === "admin";
+
+  const query = isAdmin
+    ? `SELECT * FROM complaints ORDER BY created_at DESC`
+    : `SELECT * FROM complaints WHERE user_id=? ORDER BY created_at DESC`;
+
+  db.all(query, isAdmin ? [] : [req.user.id], (err, rows) => {
     if (err) return res.status(500).json({ error: "Failed to load complaints" });
     res.json(rows);
   });
 });
 
-/* ===================== FALLBACK TO INDEX ===================== */
+app.patch("/api/complaints/:id", authMiddleware, requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  const { status } = req.body;
+
+  db.run(`UPDATE complaints SET status=? WHERE id=?`, [status, id], function (err) {
+    if (err) return res.status(500).json({ error: "Update failed" });
+    res.json({ id, status });
+  });
+});
+
+/* ================= PUBLIC STATS ================= */
+app.get("/api/public/overview", (req, res) => {
+  db.all(`SELECT status, COUNT(*) as count FROM complaints GROUP BY status`, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: "Failed" });
+    res.json({ byStatus: rows });
+  });
+});
+
+/* ================= SERVE FRONTEND ================= */
+app.use(express.static(__dirname));
+
+/* ⭐ IMPORTANT — fallback AFTER all API routes */
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
 
-/* ===================== START SERVER ===================== */
+/* ================= START SERVER ================= */
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });
