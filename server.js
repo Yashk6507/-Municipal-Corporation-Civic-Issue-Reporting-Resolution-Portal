@@ -82,6 +82,8 @@ app.post("/api/auth/login", (req, res) => {
 });
 
 /* ================= COMPLAINT ROUTES ================= */
+
+// Submit complaint
 app.post("/api/complaints", authMiddleware, upload.single("image"), (req, res) => {
   const { category, description } = req.body;
   const image = req.file ? `/uploads/${req.file.filename}` : null;
@@ -97,6 +99,7 @@ app.post("/api/complaints", authMiddleware, upload.single("image"), (req, res) =
   );
 });
 
+// Get complaints
 app.get("/api/complaints", authMiddleware, (req, res) => {
   const isAdmin = req.user.role === "admin";
 
@@ -110,10 +113,10 @@ app.get("/api/complaints", authMiddleware, (req, res) => {
   });
 });
 
-/* ⭐ ONLY ONE UPDATE ROUTE */
+// Update complaint status (ADMIN)
 app.patch("/api/complaints/:id", authMiddleware, requireAdmin, (req, res) => {
   const id = Number(req.params.id);
-  const { status } = req.body;
+  const status = req.body.status || req.body.newStatus;
 
   if (!id || !status) {
     return res.status(400).json({ error: "Invalid complaint id or status" });
@@ -147,7 +150,7 @@ app.get("/api/public/overview", (req, res) => {
 /* ================= SERVE FRONTEND ================= */
 app.use(express.static(__dirname));
 
-/* ⭐ FALLBACK LAST */
+/* ================= FALLBACK ================= */
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
