@@ -21,7 +21,6 @@ app.use(express.urlencoded({ extended: true }));
 /* ================= UPLOAD FOLDER ================= */
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
 app.use("/uploads", express.static(uploadDir));
 
 const storage = multer.diskStorage({
@@ -88,7 +87,8 @@ app.post("/api/complaints", authMiddleware, upload.single("image"), (req, res) =
   const image = req.file ? `/uploads/${req.file.filename}` : null;
 
   db.run(
-    `INSERT INTO complaints (user_id,category,description,image_path) VALUES (?,?,?,?)`,
+    `INSERT INTO complaints (user_id,category,description,image_path,status)
+     VALUES (?,?,?,?, 'Pending')`,
     [req.user.id, category, description, image],
     function (err) {
       if (err) return res.status(500).json({ error: "Failed to submit complaint" });
@@ -110,12 +110,13 @@ app.get("/api/complaints", authMiddleware, (req, res) => {
   });
 });
 
+/* ⭐ ONLY ONE UPDATE ROUTE */
 app.patch("/api/complaints/:id", authMiddleware, requireAdmin, (req, res) => {
   const id = Number(req.params.id);
   const { status } = req.body;
 
   if (!id || !status) {
-    return res.status(400).json({ error: "Invalid data" });
+    return res.status(400).json({ error: "Invalid complaint id or status" });
   }
 
   db.run(
@@ -127,24 +128,12 @@ app.patch("/api/complaints/:id", authMiddleware, requireAdmin, (req, res) => {
         return res.status(500).json({ error: "Failed to update complaint" });
       }
 
-      // ⭐ RETURN UPDATED ROW (IMPORTANT)
       db.get(`SELECT * FROM complaints WHERE id=?`, [id], (err2, row) => {
-        if (err2) {
-          console.error(err2);
-          return res.status(200).json({ id, status });
-        }
+        if (err2) return res.status(200).json({ id, status });
         res.json(row);
       });
     }
   );
-});
-  const id = Number(req.params.id);
-  const { status } = req.body;
-
-  db.run(`UPDATE complaints SET status=? WHERE id=?`, [status, id], function (err) {
-    if (err) return res.status(500).json({ error: "Update failed" });
-    res.json({ id, status });
-  });
 });
 
 /* ================= PUBLIC STATS ================= */
@@ -158,7 +147,7 @@ app.get("/api/public/overview", (req, res) => {
 /* ================= SERVE FRONTEND ================= */
 app.use(express.static(__dirname));
 
-/* ⭐ IMPORTANT — fallback AFTER all API routes */
+/* ⭐ FALLBACK LAST */
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "index.html"));
 });
