@@ -6,6 +6,7 @@ let complaintMap = null;
 let complaintMarker = null;
 let trendChart = null;
 let homeTrendChart = null;
+let adminStatsInterval = null;
 
 function ensureChartJS(cb) {
   if (typeof window.Chart !== "undefined") {
@@ -59,6 +60,10 @@ function loadAuth() {
   if (!raw) return;
   try {
     const parsed = JSON.parse(raw);
+    if (!parsed.token || !parsed.user) {
+      setAuth(null, null);
+      return;
+    }
     authToken = parsed.token;
     currentUser = parsed.user;
   } catch {
@@ -89,6 +94,12 @@ function apiFetch(path, options = {}) {
     }
     if (!res.ok) {
       const error = (data && data.error) || res.statusText;
+      if (res.status === 401 || res.status === 403) {
+        setAuth(null, null);
+        setActiveNav("login");
+        showSection("login-section");
+        showToast("Session expired. Please log in again.");
+      }
       throw new Error(error);
     }
     return data;
@@ -205,6 +216,7 @@ function setComplaintLocation(lat, lng) {
 
 function renderUserDashboard() {
   if (!currentUser) return;
+  stopAdminLiveUpdates();
   const greeting = document.getElementById("user-greeting");
   greeting.textContent = `Logged in as ${currentUser.name} (${currentUser.email})`;
   showSection("user-dashboard-section");
@@ -221,7 +233,7 @@ function renderAdminDashboard() {
   setActiveNav("");
   loadAdminComplaints();
   loadAdminUsers();
-  loadAdminStats();
+  startAdminLiveUpdates();
 }
 
 function loadPublicOverview() {
@@ -534,6 +546,7 @@ function loadAdminStats() {
       document.getElementById("admin-in-progress").textContent =
         inProgress;
       document.getElementById("admin-resolved").textContent = resolved;
+      pulseSummaryValues();
 
       updateLandingStatsFromAdmin(stats);
 
@@ -586,6 +599,32 @@ function loadAdminStats() {
     .catch((err) => {
       console.error(err);
     });
+}
+
+function startAdminLiveUpdates() {
+  stopAdminLiveUpdates();
+  loadAdminStats();
+  adminStatsInterval = setInterval(() => {
+    if (currentUser && currentUser.role === "admin") {
+      loadAdminStats();
+    }
+  }, 15000);
+}
+
+function stopAdminLiveUpdates() {
+  if (adminStatsInterval) {
+    clearInterval(adminStatsInterval);
+    adminStatsInterval = null;
+  }
+}
+
+function pulseSummaryValues() {
+  const values = document.querySelectorAll(".summary-value");
+  values.forEach((el) => {
+    el.classList.remove("live-pulse");
+    void el.offsetWidth;
+    el.classList.add("live-pulse");
+  });
 }
 
 function openAdminComplaint(id) {
@@ -769,6 +808,7 @@ function initAuthAndRouting() {
   document.querySelectorAll(".nav-link").forEach((btn) => {
     btn.addEventListener("click", () => {
       const key = btn.dataset.nav;
+      stopAdminLiveUpdates();
       setActiveNav(key);
       if (key === "home") {
         showSection("home-section");
@@ -797,6 +837,7 @@ function initAuthAndRouting() {
   document
     .getElementById("hero-track-btn")
     .addEventListener("click", () => {
+      stopAdminLiveUpdates();
       setActiveNav("track");
       showSection("track-section");
     });
@@ -804,6 +845,7 @@ function initAuthAndRouting() {
   document
     .getElementById("track-login-btn")
     .addEventListener("click", () => {
+      stopAdminLiveUpdates();
       setActiveNav("login");
       showSection("login-section");
     });
@@ -815,6 +857,7 @@ function initAuthAndRouting() {
   document
     .getElementById("user-logout-btn")
     .addEventListener("click", () => {
+      stopAdminLiveUpdates();
       setAuth(null, null);
       setActiveNav("home");
       showSection("home-section");
@@ -824,6 +867,7 @@ function initAuthAndRouting() {
   document
     .getElementById("admin-logout-btn")
     .addEventListener("click", () => {
+      stopAdminLiveUpdates();
       setAuth(null, null);
       setActiveNav("home");
       showSection("home-section");
@@ -902,6 +946,49 @@ function openComplaintModal() {
           if (typeof showToast === "function") showToast("Could not get your location");
         }
       );
+    };
+  }
+  const locInput = document.getElementById("complaint-location-text");
+  if (locInput) {
+    const tryParseLatLng = (text) => {
+      const m = text.match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
+      if (m) {
+        const lat = parseFloat(m[1]);
+        const lng = parseFloat(m[2]);
+        if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+          if (complaintMap) {
+            complaintMap.setView([lat, lng], 15);
+          }
+          setComplaintLocation(lat, lng);
+          return true;
+        }
+      }
+      return false;
+    };
+    let geoTimer = null;
+    const geocode = (q) => {
+      fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`)
+        .then((r) => r.json())
+        .then((arr) => {
+          if (Array.isArray(arr) && arr.length) {
+            const lat = parseFloat(arr[0].lat);
+            const lng = parseFloat(arr[0].lon);
+            if (!Number.isNaN(lat) && !Number.isNaN(lng)) {
+              if (complaintMap) {
+                complaintMap.setView([lat, lng], 15);
+              }
+              setComplaintLocation(lat, lng);
+            }
+          }
+        })
+        .catch(() => {});
+    };
+    locInput.oninput = () => {
+      const v = locInput.value.trim();
+      if (!v) return;
+      if (tryParseLatLng(v)) return;
+      if (geoTimer) clearTimeout(geoTimer);
+      geoTimer = setTimeout(() => geocode(v), 600);
     };
   }
 }
